@@ -78,7 +78,7 @@ if ($ADMIN->fulltree) {
         $settings->add(new admin_setting_configtext_trim_lower('enrol_ldap/objectclass', get_string('objectclass_key', 'enrol_ldap'), get_string('objectclass', 'enrol_ldap'), ''));
         $settings->add(new admin_setting_configtext_trim_lower('enrol_ldap/course_idnumber', get_string('course_idnumber_key', 'enrol_ldap'), get_string('course_idnumber', 'enrol_ldap'), '', true, true));
 
-        $coursefields = array ('shortname', 'fullname', 'summary');
+        $coursefields = array ('shortname', 'fullname', 'summary', 'category');
         foreach ($coursefields as $field) {
             $settings->add(new admin_setting_configtext_trim_lower('enrol_ldap/course_'.$field, get_string('course_'.$field.'_key', 'enrol_ldap'), get_string('course_'.$field, 'enrol_ldap'), '', true, true));
         }
@@ -97,6 +97,8 @@ if ($ADMIN->fulltree) {
         if (!during_initial_install()) {
             $options = make_categories_options();
             $settings->add(new admin_setting_configselect('enrol_ldap/category', get_string('category_key', 'enrol_ldap'), get_string('category', 'enrol_ldap'), key($options), $options));
+            $options = $yesno;
+            $settings->add(new admin_setting_configselect('enrol_ldap/autocreate_category', get_string('autocreate_category_key', 'enrol_ldap'), get_string('autocreate_category', 'enrol_ldap'), 0, $options));
         }
         $settings->add(new admin_setting_configtext_trim_lower('enrol_ldap/template', get_string('template_key', 'enrol_ldap'), get_string('template', 'enrol_ldap'), ''));
 

@@ -349,6 +349,12 @@ class enrol_ldap_plugin extends enrol_plugin {
             if (!empty($this->config->course_summary)) {
                 array_push($ldap_fields_wanted, $this->config->course_summary);
             }
+
+            // Add category to list of LDAP fields to retrieve.
+            if (isset($this->config->course_category) && !empty($this->config->course_category)) {
+                array_push($ldap_fields_wanted, $this->config->course_category);
+            }
+
             array_push($ldap_fields_wanted, $this->config->{'memberattribute_role'.$role->id});
 
             // Define the search pattern
@@ -728,6 +734,11 @@ class enrol_ldap_plugin extends enrol_plugin {
             array_push($ldap_fields_wanted, $summary);
         }
 
+        // Add category to list of LDAP fields to retrieve.
+        if (isset($this->config->course_category) && !empty($this->config->course_category)) {
+                array_push($ldap_fields_wanted, $this->config->course_category);
+        }
+
         // Define the search pattern
         if (empty($ldap_search_pattern)) {
             $ldap_search_pattern = '('.$this->get_config('memberattribute_role'.$role->id).'='.ldap_filter_addslashes($extmemberuid).')';
@@ -968,12 +979,13 @@ class enrol_ldap_plugin extends enrol_plugin {
         }
         $course = $template;
 
-        $course->category = $this->get_config('category');
-        if (!$DB->record_exists('course_categories', array('id'=>$this->get_config('category')))) {
-            $categories = $DB->get_records('course_categories', array(), 'sortorder', 'id', 0, 1);
-            $first = reset($categories);
-            $course->category = $first->id;
+        // Determine course category.
+        if (!empty($this->config->course_category) && isset($course_ext[$this->config->course_category])) {
+            $categoryname = $course_ext[$this->config->course_category][0];
+        } else {
+            $categoryname = '';
         }
+        $course->category = $this->get_category_id($trace, $categoryname);
 
         // Override with required ext data
         $course->idnumber  = $course_ext[$this->get_config('course_idnumber')][0];
@@ -1024,6 +1036,8 @@ class enrol_ldap_plugin extends enrol_plugin {
             foreach ($coursefields as $field) {
                 $shouldupdate = $shouldupdate || $this->get_config('course_'.$field.'_updateonsync');
             }
+
+            $shouldupdate = $shouldupdate || $this->get_config('course_category_updateonsync');
         }
 
         // If we should not update return immediately.
@@ -1043,6 +1057,18 @@ class enrol_ldap_plugin extends enrol_plugin {
                     && isset($externalcourse[$this->get_config('course_'.$field)][0])
                     && $course->{$field} != $externalcourse[$this->get_config('course_'.$field)][0]) {
                 $updatedcourse->{$field} = $externalcourse[$this->get_config('course_'.$field)][0];
+                $courseupdated = true;
+            }
+        }
+
+        // Check if course category requires update.
+        if ($this->get_config('course_category_updateonsync')
+            && isset($externalcourse[$this->get_config('course_category')][0])) {
+            $catid = $this->get_category_id($trace, $externalcourse[$this->get_config('course_category')][0]);
+
+            // If category was updated, mark course as needs update.
+            if ($catid != $course->category) {
+                $updatedcourse->category = $catid;
                 $courseupdated = true;
             }
         }
@@ -1152,6 +1178,87 @@ class enrol_ldap_plugin extends enrol_plugin {
         // Just restore every role.
         if ($DB->record_exists('user_enrolments', array('enrolid'=>$instance->id, 'userid'=>$userid))) {
             role_assign($roleid, $userid, $contextid, 'enrol_'.$instance->enrol, $instance->id);
+        }
+    }
+
+    /**
+     * Get category id from database by name.
+     *
+     * Creates category if does not exist yet and plugin config auto_create setting is set to TRUE.
+     * If category is not found ot $name is empty, returns plugin's config default category ($this->config->category).
+     *
+     * @param progress_trace $trace
+     * @param string $name
+     * @return int
+     */
+    protected function get_category_id(progress_trace $trace, $name = '') {
+
+        global $DB, $CFG;
+        require_once($CFG->libdir . '/coursecatlib.php');
+
+        static $categorycache = array();
+
+        // No category name specified. Use default category.
+        if (empty($name)) {
+
+            $catid = $this->get_config('category');
+            $category = coursecat::get($catid, IGNORE_MISSING, true);
+
+            // Specified category for auto-created courses does not exist.
+            // Use default category.
+            if (!$category) {
+                $trace->output('Specified category for auto created courses does not exist! Using default category.');
+                $category = coursecat::get_default();
+            }
+
+            return $category->id;
+        }
+
+        // Return category from local cache.
+        if (!empty($categorycache[$name])) {
+            return $categorycache[$name];
+        } else {  // First time we see this category, retrieve it's id (or create if needed).
+
+            // Find category id in database by name.
+            $catid = $DB->get_record("course_categories", array('name' => addslashes($name)), "id");
+
+            if ($catid) {
+                $category = coursecat::get($catid->id, IGNORE_MISSING, true);
+            }
+
+            // Category does not exist.
+            if (!isset($category) || !$category) {
+
+                $autocreate = $this->get_config('autocreate_category');
+
+                // Not configured for auto creation, use default category.
+                // Remember default category ID under this category's name for speedup during sync.
+                if (empty($autocreate)) {
+                    $categorycache[$name] = $this->get_category_id($trace);
+                    return $categorycache[$name];
+                }
+
+                if (core_text::strlen($name) > 255) {
+                    $trace->output('Category name: '.$name.' too long. Using default category');
+                    $categorycache[$name] = $this->get_category_id($trace);
+                    return $categorycache[$name];
+                }
+
+                $category = coursecat::create(array( 'name' => $name ));
+
+                if (!$category) {
+                    $trace->output('Error creating new category. Using default category.'.$name);
+                    $categorycache[$name] = $this->get_category_id($trace);
+                    return $categorycache[$name];
+                }
+
+                $trace->output('Category '.$name.' created ( id => '.$category->id. ' )');
+            }
+
+            // Save name in local cache for speedup during sync.
+            $categorycache[$name] = $category->id;
+
+            return $categorycache[$name];
         }
     }
 }
